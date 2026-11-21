@@ -1,0 +1,8 @@
+{
+    "codeBlocks.ignoredLanguageIds": [
+        "ini",
+        "plaintext",
+        "Log",
+        "ignore"
+    ]
+}
