@@ -1,26 +1,47 @@
-# Smart Car Parking — ESP32-WROOM-32
+# Smart Parking ESP32 - first sensor (P1)
 
-This PlatformIO project monitors four parking slots with HC-SR04 ultrasonic sensors and serves a live dashboard directly from the ESP32. The optional magnetic-sensor input path is present but disabled by default.
+This project is the first bench-tested slice of the smart parking system: one ESP32-WROOM-32 reads one HC-SR04 ultrasonic sensor, prints readings to the Serial Monitor, and serves a small live dashboard to a phone or laptop.
 
-## Safe 38-pin pinout
+The current version is intentionally for one physical slot. Add the remaining sensors after P1 has been wired, measured, and calibrated.
 
-| Function | Slot 1 | Slot 2 | Slot 3 | Slot 4 | Notes |
-|---|---:|---:|---:|---:|---|
-| HC-SR04 Trig | GPIO13 | GPIO14 | GPIO16 | GPIO17 | ESP32 output |
-| HC-SR04 Echo | GPIO34 | GPIO35 | GPIO36 | GPIO39 | Input-only pins; use a divider |
-| Magnetic input (optional) | GPIO32 | GPIO33 | GPIO25 | GPIO26 | Active-low with `INPUT_PULLUP` |
+## Hardware
 
-This mapping avoids flash-connected GPIO6–11 and boot-strapping GPIO0, 2, 5, 12 and 15. GPIO34–39 are used only as inputs. GPIO16/17 are suitable on the ESP32-WROOM-32 target used by `esp32dev`.
+- ESP32 DevKit / ESP32-WROOM-32 (38-pin `esp32dev` board)
+- One HC-SR04 ultrasonic sensor
+- Three 5.6 kΩ resistors for the Echo voltage divider (one upper resistor and two lower resistors in series)
+- Breadboard and jumper wires
+- USB cable for the ESP32
 
-### HC-SR04 voltage warning
+## Wiring for P1
 
-Power the HC-SR04 modules according to their module requirements, but do not connect a 5 V Echo output directly to an ESP32 GPIO. Use a resistor divider for every Echo line, for example 1 kΩ from Echo to the ESP32 pin and 2 kΩ from the ESP32 pin to GND. Connect all grounds together.
+| HC-SR04 | ESP32 / breadboard |
+|---|---|
+| VCC | ESP32 `5V` or `VIN` |
+| GND | ESP32 `GND` |
+| TRIG | GPIO 14 |
+| ECHO | GPIO 34 through the divider below |
+| LED anode (long leg) | GPIO 13 through a series resistor |
+| LED cathode (short leg / flat side) | ESP32 GND |
 
-The firmware considers a slot occupied when the debounced distance is below `OCCUPIED_DISTANCE_CM` (20 cm). Adjust that constant in `src/main.cpp` for your physical mounting height.
+GPIO 34 is input-only, which is appropriate for the sensor's Echo output. Do not connect a 5 V Echo signal directly to an ESP32 GPIO.
 
-## Build, flash and monitor on macOS
+```text
+HC-SR04 ECHO ──[5.6 kΩ]──●── ESP32 GPIO 34
+                       |
+                     [5.6 kΩ]
+                       |
+                     [5.6 kΩ]
+                       |
+HC-SR04 GND ───────────●── ESP32 GND
+```
 
-From this project directory:
+Put one 5.6 kΩ resistor between ECHO and the shared junction. Connect GPIO 34 and one end of a second 5.6 kΩ resistor to that same junction. Connect the second resistor end-to-end with the third 5.6 kΩ resistor, then connect the third resistor to GND. Connect sensor GND and ESP32 GND together. This 5.6 kΩ / 11.2 kΩ divider reduces a 5 V Echo signal to about 3.3 V. The fourth resistor is spare.
+
+Power the sensor from the ESP32's 5 V/VIN pin while the ESP32 is powered by USB. Check the labels on your particular ESP32 board before connecting power.
+
+## Set up and upload
+
+Open this folder in VS Code with the PlatformIO extension, or use the PlatformIO command line from this folder:
 
 ```sh
 pio run
@@ -28,16 +49,62 @@ pio run -t upload
 pio device monitor -b 115200
 ```
 
-If PlatformIO is not installed:
+The firmware starts an access point by default, so no router credentials are needed for the first test:
 
-```sh
-python3 -m pip install --user platformio
-```
+- Wi-Fi name: `SmartParking-Setup`
+- Password: `parking123`
+- Dashboard: `http://192.168.4.1/`
 
-Set `WIFI_SSID` and `WIFI_PASSWORD` near the top of `src/main.cpp` before flashing. After boot, open the printed `http://<ESP32-IP>/` address on a phone or laptop connected to the same Wi-Fi. If station connection fails for 15 seconds, connect to Wi-Fi network `SmartParking-Setup` with password `parking123`, then open `http://192.168.4.1/`.
+If your phone warns that the Wi-Fi has no internet, stay connected and open the dashboard address above. This firmware uses the ESP32 access point directly; router credentials are not configured in this version.
 
-## Magnetic upgrade
+### If firmware upload fails
 
-`USE_MAGNETIC_SENSORS` is `false` by default, so the four ultrasonic sensors are the only occupancy source. Change it to `true` after wiring active-low magnetic sensors to the optional pins in the table. The magnetic path then updates debounced occupancy while ultrasonic readings remain visible for diagnostics.
+Close the Serial Monitor before uploading; it holds the USB serial port open. The project uses a conservative `115200` upload speed to improve reliability. If the ESP32 does not enter its bootloader automatically, hold the board's `BOOT` button when PlatformIO prints `Connecting...` and release it once writing begins. Use a USB data cable and the port shown by `pio device list`.
 
-The code is structured around `serviceUltrasonic()`, `serviceMagneticSensors()`, and the WebSocket transport, so a BLE service can later publish the same status model without changing the sensor state machine.
+An upload must finish with `SUCCESS` before the new firmware is running.
+
+## First sensor test
+
+1. Keep the ESP32 unplugged while making the connections.
+2. Check each wire against the table and divider diagram, especially ECHO to GPIO 34.
+3. Connect the ESP32 by USB and upload the firmware.
+4. Open the Serial Monitor at `115200` baud. You should see P1 distance readings about ten times per second.
+5. Hold a flat object 20-50 cm in front of the sensor, then move it away. The distance should change consistently.
+6. Connect your phone to `SmartParking-Setup` and open `http://192.168.4.1/` to see the same reading in the dashboard.
+
+For the eventual parking setup, mount the sensor above the bay facing downward. With no vehicle, measure the floor distance. Then measure the roof or bonnet distance with a vehicle or a suitable test object. Set the occupied and vacant thresholds in `src/main.cpp` so they fall between the measured empty and occupied ranges. The defaults are demonstration values, not calibrated values for your parking space.
+
+The firmware takes a reading every 100 ms, uses the median of up to three valid readings to reduce spikes, and requires two consistent samples before changing the slot state. This makes occupancy updates quicker while retaining basic noise filtering. It uses separate occupied/vacant thresholds (20 cm and 25 cm by default). If no Echo pulse arrives, Serial Monitor prints `NO ECHO` with the GPIO 34 level and wiring checks. Valid readings clear the sensor error automatically.
+
+## Dashboard and status endpoint
+
+- `/` serves the phone-friendly P1 dashboard.
+- `/api/status` returns the current sensor reading, occupancy state, and sensor-error state as JSON.
+
+The dashboard is served locally by the ESP32. This version does not use a cloud service, database, MQTT gateway, mobile app installation, magnetic sensors, or gate servo.
+
+## Configuration
+
+In `src/main.cpp`:
+
+- `TRIG_PIN` and `ECHO_PIN` select the sensor pins (`14` and `34` for the current wiring).
+- `OCCUPIED_BELOW_CM` is the occupied threshold.
+- `VACANT_ABOVE_CM` is the release threshold; keep it several centimeters above the occupied threshold.
+- `SAMPLE_INTERVAL_MS`, `MEDIAN_SIZE`, `DEBOUNCE_SAMPLES`, and `ERROR_AFTER_BAD_READS` control sampling and filtering.
+- The setup access point starts automatically: `SmartParking-Setup` / `parking123`.
+- `LED_ENABLED` is `true`. The LED on GPIO 13 lights when P1 is marked occupied. Connect the LED anode (long leg) to GPIO 13 through a series resistor, and its cathode (short leg / flat side) to GND. A 5.6 kΩ resistor is safe but may make the LED dim; 330 Ω to 1 kΩ gives a brighter indicator.
+
+GPIO 14 avoids the GPIO 5 boot-strapping pin. GPIO 34 is input-only, which suits the ECHO signal. Never connect ECHO directly to the ESP32; keep the divider in place.
+
+## Extending to more spaces
+
+After P1 works reliably, add one sensor at a time and keep each Echo line on its own divider and input-only ESP32 pin. The original four-slot pin plan was:
+
+| Slot | TRIG | ECHO |
+|---|---:|---:|
+| P1 | GPIO 14 | GPIO 34 |
+| P2 | GPIO 16 | GPIO 35 |
+| P3 | GPIO 17 | GPIO 36 |
+| P4 | GPIO 25 | GPIO 39 |
+
+GPIO 34-39 are input-only on the ESP32-WROOM-32. Keep all sensor and ESP32 grounds connected together. Do not add all four sensors until P1's distance and thresholds are stable.
